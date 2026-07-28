@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Cambio</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="toast" class="toast" hidden></div>
+
+<!-- LOADING (reconnect attempt) -->
+<section id="screen-loading" class="screen" hidden>
+  <div class="card-panel landing-panel">
+    <h1 class="logo">Cambio</h1>
+    <p class="subtitle">Reconnecting to your game&hellip;</p>
+  </div>
+</section>
+
+<!-- LANDING -->
+<section id="screen-landing" class="screen" hidden>
+  <div class="card-panel landing-panel">
+    <h1 class="logo">Cambio</h1>
+    <p class="subtitle">Lowest score wins. Trust your memory.</p>
+    <label class="field">
+      <span>Your name</span>
+      <input id="nameInput" maxlength="16" placeholder="e.g. Yaari" autocomplete="off">
+    </label>
+    <button id="createBtn" class="btn btn-primary">Create a game</button>
+    <div class="divider">or join with a code</div>
+    <label class="field">
+      <span>Room code</span>
+      <input id="codeInput" maxlength="4" placeholder="ABCD" autocomplete="off" style="text-transform:uppercase">
+    </label>
+    <button id="joinBtn" class="btn btn-secondary">Join game</button>
+    <p id="landingError" class="error-text" hidden></p>
+  </div>
+</section>
+
+<!-- LOBBY -->
+<section id="screen-lobby" class="screen" hidden>
+  <div class="card-panel">
+    <h2>Room <span id="lobbyCode"></span></h2>
+    <p class="subtitle">Send this link to your friends:</p>
+    <div class="share-row">
+      <input id="shareLink" readonly>
+      <button id="copyLinkBtn" class="btn btn-small">Copy</button>
+    </div>
+    <h3>Players</h3>
+    <ul id="lobbyPlayers" class="player-list"></ul>
+    <button id="addBotBtn" class="btn btn-secondary" hidden>Add a bot</button>
+    <button id="startBtn" class="btn btn-primary" disabled>Start game</button>
+    <p id="lobbyHint" class="subtitle">Waiting for the host to start&hellip;</p>
+  </div>
+</section>
+
+<!-- GAME -->
+<section id="screen-game" class="screen" hidden>
+  <div class="game-layout">
+    <div id="opponents" class="opponents"></div>
+
+    <div class="table-center">
+      <div class="pile-row">
+        <div class="pile">
+          <div id="deckPile" class="card card-back pile-card"></div>
+          <div class="pile-label">Deck (<span id="deckCount">0</span>)</div>
+        </div>
+        <div id="drawnArea" class="drawn-area" hidden>
+          <div id="drawnCard" class="card"></div>
+          <div class="pile-label">Drawn card</div>
+        </div>
+        <div class="pile">
+          <div id="discardPile" class="card pile-card"></div>
+          <div class="pile-label">Discard</div>
+        </div>
+      </div>
+
+      <div id="statusLine" class="status-line">Waiting for game to start&hellip;</div>
+
+      <div id="decisionBar" class="action-bar" hidden>
+        <span>Drew a card &mdash; tap one of your cards to swap, or:</span>
+        <button id="discardDrawnBtn" class="btn btn-secondary">Discard it</button>
+      </div>
+
+      <div id="powerBar" class="action-bar" hidden></div>
+      <div id="giveBar" class="action-bar" hidden>
+        <span>You must give one of your cards away &mdash; tap a card in your hand.</span>
+      </div>
+    </div>
+
+    <div class="my-area">
+      <div class="my-header">
+        <span id="myName" class="my-name"></span>
+        <button id="cambioBtn" class="btn btn-cambio" hidden>Call Cambio!</button>
+      </div>
+      <div id="myHand" class="hand-grid"></div>
+    </div>
+
+    <div class="log-panel">
+      <div id="logList" class="log-list"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ROUND END MODAL -->
+<div id="roundEndModal" class="modal-overlay" hidden>
+  <div class="modal card-panel">
+    <h2>Round over!</h2>
+    <div id="resultList" class="result-list"></div>
+    <button id="playAgainBtn" class="btn btn-primary" hidden>Play again</button>
+    <p id="waitHostText" class="subtitle" hidden>Waiting for the host to start a new round&hellip;</p>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="client.js"></script>
+</body>
+</html>
