@@ -274,6 +274,37 @@ html, body {
   box-shadow: 0 4px 12px rgba(0,0,0,0.4);
 }
 
+.cambio-banner {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.5);
+  background: var(--danger);
+  color: white;
+  font-size: 1.5rem;
+  font-weight: 800;
+  text-align: center;
+  padding: 22px 30px;
+  border-radius: 18px;
+  box-shadow: 0 14px 36px rgba(0,0,0,0.55);
+  z-index: 500;
+  pointer-events: none;
+  opacity: 0;
+  max-width: 90vw;
+}
+.cambio-banner.show { animation: cambioPop 2.6s ease forwards; }
+@keyframes cambioPop {
+  0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
+  15% { transform: translate(-50%, -50%) scale(1.1); opacity: 1; }
+  25% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  85% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(0.9); opacity: 0; }
+}
+
+@media (max-width: 480px) {
+  .cambio-banner { font-size: 1.15rem; padding: 16px 20px; }
+}
+
 @media (max-width: 480px) {
   .card { width: 48px; height: 66px; font-size: 0.95rem; }
 }

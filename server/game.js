@@ -271,8 +271,9 @@ class Room {
       this.pendingPower = { type: power, playerId, stage: 'start' };
       this.addLog(`${this.getPlayer(playerId).name} discarded ${card.rank} and may use its power.`);
     } else if (isSelfMatch) {
-      this.addLog(`${this.getPlayer(playerId).name} matched the discard pile with ${card.rank} -- no power.`);
-      this.finishTurn();
+      // Matching your freshly-drawn card against the discard pile is a bonus:
+      // no power, and instead of ending your turn you get to go again.
+      this.addLog(`${this.getPlayer(playerId).name} matched the discard pile with ${card.rank} -- gets another turn!`);
     } else {
       this.addLog(`${this.getPlayer(playerId).name} discarded ${card.rank}.`);
       this.finishTurn();

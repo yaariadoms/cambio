@@ -5,6 +5,7 @@ let roomCode = null;
 let lastState = null;
 let lastModeKey = null;
 let selectionBuffer = [];
+let lastCambioCalledBy = null;
 
 const SUIT_SYMBOL = { S: '♠', H: '♥', D: '♦', C: '♣' };
 const RED_SUITS = new Set(['H', 'D']);
@@ -29,6 +30,23 @@ function toast(msg) {
   el.hidden = false;
   clearTimeout(toast._t);
   toast._t = setTimeout(() => { el.hidden = true; }, 3000);
+}
+
+// A big, unmissable banner announcing a Cambio call -- shown to everyone,
+// including the caller, the moment it happens (not just a status-line note).
+function showCambioBanner(playerId, state) {
+  const player = state.players.find((p) => p.id === playerId);
+  const name = player ? player.name : 'Someone';
+  const el = document.getElementById('cambioBanner');
+  el.textContent = playerId === myId
+    ? '🚨 You called CAMBIO! Last turn for everyone else! 🚨'
+    : `🚨 ${name} called CAMBIO! Last turn! 🚨`;
+  el.hidden = false;
+  el.classList.remove('show');
+  void el.offsetWidth; // force reflow so a re-trigger restarts the animation
+  el.classList.add('show');
+  clearTimeout(showCambioBanner._t);
+  showCambioBanner._t = setTimeout(() => { el.hidden = true; }, 2700);
 }
 
 // ---------- Session persistence (survive a page refresh) ----------
@@ -271,7 +289,8 @@ function isClickable(mode, isMine) {
     case 'power:blindSwap': return true;
     case 'kingPower:start': return true;
     case 'give': return isMine;
-    case 'glue': return true;
+    // Gluing is drag-to-discard-pile only -- tapping a card never attempts
+    // a glue, so there's no accidental wrong-guess penalty from a stray tap.
     default: return false;
   }
 }
@@ -305,8 +324,6 @@ function handleCardClick(mode, playerId, index, isMine) {
     renderGame(lastState);
   } else if (mode === 'give') {
     socket.emit('resolveGive', { index });
-  } else if (mode === 'glue') {
-    socket.emit('attemptGlue', { targetPlayerId: playerId, targetIndex: index });
   }
 }
 
@@ -515,7 +532,11 @@ function describeStatus(state) {
   if (!cur) return 'Waiting…';
   if (cur.id === myId) {
     if (state.myDrawnCard) {
-      return `You drew ${state.myDrawnCard.rank}${SUIT_SYMBOL[state.myDrawnCard.suit]} — drag it onto a card to swap${state.myDrawnCard.from === 'deck' ? ', or onto the discard pile to throw it away' : ''}.` + cambioNote;
+      const matchesTop = state.myDrawnCard.from === 'deck' && state.discardTop && state.myDrawnCard.rank === state.discardTop.rank;
+      const discardHint = state.myDrawnCard.from === 'deck'
+        ? (matchesTop ? ', or drag it onto the discard pile to match it and get another turn' : ', or onto the discard pile to throw it away')
+        : '';
+      return `You drew ${state.myDrawnCard.rank}${SUIT_SYMBOL[state.myDrawnCard.suit]} — drag it onto a card to swap${discardHint}.` + cambioNote;
     }
     if (state.pendingPower && state.pendingPower.mine) {
       const map = {
@@ -1075,6 +1096,11 @@ socket.on('state', (state) => {
   const prevDiscardTop = lastState ? lastState.discardTop : null;
   const preRects = captureAllSlotRects();
   if (state.myDrawnCard) cachedOwnDrawnCard = state.myDrawnCard;
+
+  if (state.cambioCalledBy && state.cambioCalledBy !== lastCambioCalledBy) {
+    showCambioBanner(state.cambioCalledBy, state);
+  }
+  lastCambioCalledBy = state.cambioCalledBy;
 
   if (state.phase === 'lobby') {
     lastState = state;
