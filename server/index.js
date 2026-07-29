@@ -21,6 +21,7 @@ const EMPTY_ROOM_GRACE_MS = 5 * 60 * 1000; // let a lone disconnected player ref
 const MAX_PLAYERS = 4;
 const BOT_TURN_DELAY_MS = [3000, 5000]; // [min, max) - slow enough to leave a real window to glue
 const DEAL_PEEK_MS = 4000; // must exceed the client's peek-flash duration (3500ms)
+const FINAL_GLUE_MS = 5000; // window after the last turn where anyone can still glue before scoring
 
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 function generateRoomCode() {
@@ -56,6 +57,18 @@ function broadcastRoom(room) {
     if (socket && player.connected) socket.emit('state', room.getStateFor(player.id));
   }
   scheduleBotTurnIfNeeded(room);
+  scheduleFinalGlueIfNeeded(room);
+}
+
+function scheduleFinalGlueIfNeeded(room) {
+  if (room.phase !== 'finalGlue' || room.finalGlueScheduled) return;
+  room.finalGlueScheduled = true;
+  setTimeout(() => {
+    room.finalGlueScheduled = false;
+    if (rooms.get(room.code) !== room || room.phase !== 'finalGlue') return;
+    room.endRound();
+    broadcastRoom(room);
+  }, FINAL_GLUE_MS);
 }
 
 function scheduleBotTurnIfNeeded(room) {

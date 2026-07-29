@@ -25,6 +25,8 @@ class Room {
     this.nextBotNumber = 1;
     this.events = []; // structured, viewer-agnostic movement events for animation
     this.eventSeq = 0;
+    this.finalGlueScheduled = false; // used by index.js to schedule the delayed endRound()
+    this.glueStreakOwner = null; // playerId who currently has exclusive rights to glue the top card
   }
 
   addLog(msg) {
@@ -146,6 +148,12 @@ class Room {
   // discard card and actually starts play.
   startGame() {
     if (this.players.length < 2) throw new Error('Need at least 2 players');
+    // The winner of the previous round leads the next one; the very first
+    // round of a fresh game picks randomly so the host isn't always first.
+    const previousWinnerId = this.lastResult && this.lastResult.winners && this.lastResult.winners.length
+      ? this.lastResult.winners[0]
+      : null;
+
     this.deck = shuffle(makeDeck());
     this.discardPile = [];
     this.knowledge = new Map();
@@ -159,6 +167,8 @@ class Room {
     this.lastResult = null;
     this.events = [];
     this.eventSeq = 0;
+    this.finalGlueScheduled = false;
+    this.glueStreakOwner = null;
 
     for (const player of this.players) {
       player.hand = [this.deck.pop(), this.deck.pop(), this.deck.pop(), this.deck.pop()];
@@ -169,7 +179,8 @@ class Room {
       this.grantKnowledge(player.id, player.id, 3);
     }
 
-    this.currentPlayerIndex = 0;
+    const winnerIndex = previousWinnerId ? this.players.findIndex((p) => p.id === previousWinnerId) : -1;
+    this.currentPlayerIndex = winnerIndex !== -1 ? winnerIndex : Math.floor(Math.random() * this.players.length);
     this.phase = 'dealing';
     this.addLog('Cards dealt. Take a moment to peek at your bottom two cards.');
   }
@@ -231,6 +242,7 @@ class Room {
     const oldCard = player.hand[index];
     player.hand[index] = this.drawnCard;
     this.discardPile.push(oldCard);
+    this.glueStreakOwner = null; // a fresh discard is open for anyone to glue first
     this.invalidateSlot(playerId, index);
     this.addLog(`${player.name} swapped in the drawn card.`);
     this.drawnCard = null;
@@ -250,6 +262,7 @@ class Room {
     const previousTop = this.discardPile.length ? this.discardPile[this.discardPile.length - 1] : null;
     const isSelfMatch = !!previousTop && previousTop.rank === card.rank;
     this.discardPile.push(card);
+    this.glueStreakOwner = null; // a fresh discard is open for anyone to glue first
     this.drawnCard = null;
     this.drawnFrom = null;
     this.addEvent({ type: 'discard', by: playerId });
@@ -324,16 +337,53 @@ class Room {
     }
 
     if (payload.type === 'kingPower') {
+      // The King is flexible, not a fixed sequence: peek just one card, peek
+      // two and then decide whether to swap them, or skip peeking entirely
+      // and blind-swap any two cards directly. None of it is mandatory --
+      // skipPower always remains available too.
       if (payload.action === 'peek') {
-        const { targets } = payload; // [{playerId, index}, {playerId, index}]
-        if (!Array.isArray(targets) || targets.length !== 2) throw new Error('Need two targets');
+        if (pending.stage !== 'start') throw new Error('Power already resolved');
+        const { targets } = payload; // [{playerId, index}] or [{playerId, index}, {playerId, index}]
+        if (!Array.isArray(targets) || targets.length < 1 || targets.length > 2) throw new Error('Pick one or two cards');
+        const seen = new Set();
         for (const t of targets) {
           const p = this.getPlayer(t.playerId);
           if (!p || t.index < 0 || t.index >= p.hand.length) throw new Error('Invalid slot');
+          const key = `${t.playerId}#${t.index}`;
+          if (seen.has(key)) throw new Error('Pick two different cards');
+          seen.add(key);
         }
         for (const t of targets) this.grantKnowledge(playerId, t.playerId, t.index);
-        this.pendingPower = { type: 'kingPower', playerId, stage: 'decide', targets };
-        this.addLog(`${this.getPlayer(playerId).name} peeked at two cards (King power).`);
+        if (targets.length === 1) {
+          this.addLog(`${this.getPlayer(playerId).name} peeked at one card (King power).`);
+          this.pendingPower = null;
+          this.finishTurn();
+        } else {
+          this.pendingPower = { type: 'kingPower', playerId, stage: 'decide', targets };
+          this.addLog(`${this.getPlayer(playerId).name} peeked at two cards (King power).`);
+        }
+        return;
+      }
+      if (payload.action === 'directSwap') {
+        // Blind-swap two cards without peeking at either -- only before any peek.
+        if (pending.stage !== 'start') throw new Error('Already peeked -- resolve that first');
+        const { a, b } = payload;
+        const pa = this.getPlayer(a.playerId);
+        const pb = this.getPlayer(b.playerId);
+        if (!pa || !pb) throw new Error('Invalid target');
+        if (a.index < 0 || a.index >= pa.hand.length || b.index < 0 || b.index >= pb.hand.length) {
+          throw new Error('Invalid slot');
+        }
+        if (a.playerId === b.playerId && a.index === b.index) throw new Error('Cannot swap a card with itself');
+        const tmp = pa.hand[a.index];
+        pa.hand[a.index] = pb.hand[b.index];
+        pb.hand[b.index] = tmp;
+        this.invalidateSlot(a.playerId, a.index);
+        this.invalidateSlot(b.playerId, b.index);
+        this.addLog(`${this.getPlayer(playerId).name} blind-swapped two cards (King power).`);
+        this.addEvent({ type: 'blindSwap', by: playerId, a, b });
+        this.pendingPower = null;
+        this.finishTurn();
         return;
       }
       if (payload.action === 'decide') {
@@ -369,12 +419,18 @@ class Room {
   }
 
   attemptGlue(playerId, targetPlayerId, targetIndex) {
-    if (this.phase !== 'play') throw new Error('Game not active');
+    if (this.phase !== 'play' && this.phase !== 'finalGlue') throw new Error('Game not active');
     if (this.discardPile.length === 0) throw new Error('Nothing to glue against');
     const gluer = this.getPlayer(playerId);
     const target = this.getPlayer(targetPlayerId);
     if (!gluer || !target) throw new Error('Invalid player');
     if (targetIndex < 0 || targetIndex >= target.hand.length) throw new Error('Invalid slot');
+    // Whoever glues the current discard first keeps exclusive rights to keep
+    // gluing it (chaining more matches) until a fresh card is discarded.
+    if (this.glueStreakOwner !== null && this.glueStreakOwner !== playerId) {
+      const owner = this.getPlayer(this.glueStreakOwner);
+      throw new Error(`${owner ? owner.name : 'Someone'} is already gluing this card -- wait for a new discard.`);
+    }
 
     const top = this.discardPile[this.discardPile.length - 1];
     const card = target.hand[targetIndex];
@@ -395,6 +451,7 @@ class Room {
     target.hand.splice(targetIndex, 1);
     this.invalidateFrom(targetPlayerId, targetIndex);
     this.discardPile.push(card);
+    this.glueStreakOwner = playerId;
     this.addEvent({ type: 'glue', by: playerId, ownerId: targetPlayerId, index: targetIndex });
 
     if (targetPlayerId === playerId) {
@@ -473,7 +530,11 @@ class Room {
         this.cambioFinalTurnsRemaining -= 1;
       }
       if (this.cambioFinalTurnsRemaining <= 0) {
-        this.endRound();
+        // Give everyone one last chance to glue against the final discard
+        // before hands are revealed. index.js schedules the delayed
+        // endRound() call once this phase is set.
+        this.phase = 'finalGlue';
+        this.addLog('Last chance to glue before hands are revealed!');
         return;
       }
     }
@@ -548,7 +609,7 @@ class Room {
       phase: this.phase,
       players,
       hostId: this.hostId,
-      currentPlayerId: this.phase === 'dealing' ? null : (current ? current.id : null),
+      currentPlayerId: (this.phase === 'dealing' || this.phase === 'finalGlue') ? null : (current ? current.id : null),
       deckCount: this.deck.length,
       discardTop: this.discardPile.length ? { rank: this.discardPile[this.discardPile.length - 1].rank, suit: this.discardPile[this.discardPile.length - 1].suit } : null,
       myDrawnCard,

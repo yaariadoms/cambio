@@ -259,7 +259,7 @@ function computeMode(state) {
     return 'power:' + state.pendingPower.type;
   }
   if (state.pendingGiveForMe) return 'give';
-  if (state.phase === 'play' && state.discardTop) return 'glue';
+  if ((state.phase === 'play' || state.phase === 'finalGlue') && state.discardTop) return 'glue';
   return 'none';
 }
 
@@ -296,9 +296,13 @@ function handleCardClick(mode, playerId, index, isMine) {
       });
     });
   } else if (mode === 'kingPower:start') {
-    addToSelectionBuffer(playerId, index, (sel) => {
-      socket.emit('powerAction', { type: 'kingPower', action: 'peek', targets: sel });
-    });
+    // Toggle into a 1-or-2 card selection instead of auto-firing at a fixed
+    // count -- the power bar shows a "Peek selected" button once >=1 is
+    // picked, so the player chooses whether to peek just one or two.
+    const pos = selectionBuffer.findIndex((s) => s.playerId === playerId && s.index === index);
+    if (pos !== -1) selectionBuffer.splice(pos, 1);
+    else if (selectionBuffer.length < 2) selectionBuffer.push({ playerId, index });
+    renderGame(lastState);
   } else if (mode === 'give') {
     socket.emit('resolveGive', { index });
   } else if (mode === 'glue') {
@@ -385,7 +389,7 @@ function makeHandGrid(player, isMine, mode, state) {
     el.dataset.player = player.id;
     el.dataset.index = String(idx);
 
-    const clickable = state.phase === 'play' && isClickable(mode, isMine);
+    const clickable = (state.phase === 'play' || state.phase === 'finalGlue') && isClickable(mode, isMine);
     if (clickable) {
       el.classList.add('clickable');
       el.addEventListener('click', () => handleCardClick(mode, player.id, idx, isMine));
@@ -395,7 +399,7 @@ function makeHandGrid(player, isMine, mode, state) {
     // mode -- so a player isn't blocked from chaining more glues just
     // because they owe a give from a previous one. Giving is drag-only
     // as an alternative to the click-to-give fallback above.
-    const canGlueDrag = state.phase === 'play' && !!state.discardTop;
+    const canGlueDrag = (state.phase === 'play' || state.phase === 'finalGlue') && !!state.discardTop;
     const canGiveDrag = isMine && !!state.pendingGiveForMe;
     // J/Q (blind swap) and King's peek step: pick the pair by dragging one
     // card onto another -- any card, mine or an opponent's, either
@@ -448,9 +452,11 @@ function setupCardDrag(el, playerId, index, opts) {
             bPlayerId, bIndex,
           });
         } else {
+          // King power: dragging card-to-card is the "just switch" option --
+          // an immediate blind swap with no peek. Peeking is tap-based instead.
           socket.emit('powerAction', {
-            type: 'kingPower', action: 'peek',
-            targets: [{ playerId, index }, { playerId: bPlayerId, index: bIndex }],
+            type: 'kingPower', action: 'directSwap',
+            a: { playerId, index }, b: { playerId: bPlayerId, index: bIndex },
           });
         }
         settleGhost(ghost, cardHit.getBoundingClientRect(), () => { activeDrag = null; });
@@ -468,6 +474,36 @@ function setupCardDrag(el, playerId, index, opts) {
   });
 }
 
+// King power "decide" stage: the two peeked cards are shown face-up; drag
+// either one onto the other to confirm the swap (card-to-card, no buttons).
+function setupKingDecideDrag(sourceEl, targetEl, rank, suit) {
+  sourceEl.classList.add('draggable-card');
+  sourceEl.addEventListener('pointerdown', (e) => {
+    if (activeDrag) return;
+    e.preventDefault();
+    const rect = sourceEl.getBoundingClientRect();
+    const ghost = makeMovableCard({ faceUp: true, rank, suit }, rect, 'drag-ghost');
+    activeDrag = { kind: 'king-decide-drag', ghostEl: ghost, revealed: true };
+    moveGhostTo(ghost, e.clientX, e.clientY);
+
+    const onMove = (ev) => moveGhostTo(ghost, ev.clientX, ev.clientY);
+    const onUp = (ev) => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      if (!activeDrag || activeDrag.ghostEl !== ghost) return;
+      const target = document.elementFromPoint(ev.clientX, ev.clientY);
+      if (target && (target === targetEl || targetEl.contains(target))) {
+        socket.emit('powerAction', { type: 'kingPower', action: 'decide', swap: true });
+        settleGhost(ghost, targetEl.getBoundingClientRect(), () => { activeDrag = null; });
+      } else {
+        settleGhost(ghost, sourceEl.getBoundingClientRect(), () => { activeDrag = null; });
+      }
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  });
+}
+
 function describeStatus(state) {
   const cur = state.players.find((p) => p.id === state.currentPlayerId);
   const cambioNote = state.cambioCalledBy
@@ -475,6 +511,7 @@ function describeStatus(state) {
     : '';
   if (state.phase === 'roundEnd') return 'Round complete! Check the results.';
   if (state.phase === 'dealing') return 'Memorize your bottom two cards — the game starts in a moment…';
+  if (state.phase === 'finalGlue') return 'Last chance to glue before hands are revealed!';
   if (!cur) return 'Waiting…';
   if (cur.id === myId) {
     if (state.myDrawnCard) {
@@ -488,8 +525,8 @@ function describeStatus(state) {
       };
       if (state.pendingPower.type === 'kingPower') {
         return state.pendingPower.stage === 'start'
-          ? 'King power: drag any card onto another to peek at both.'
-          : 'King power: decide whether to swap the two peeked cards.';
+          ? 'King power: tap 1 or 2 cards to peek, or drag one card onto another to blind-swap without looking.'
+          : 'King power: drag one peeked card onto the other to swap them, or leave them.';
       }
       return (map[state.pendingPower.type] || 'Resolve your power.') + cambioNote;
     }
@@ -584,18 +621,42 @@ function renderGame(state) {
     if (state.pendingPower.type === 'kingPower' && state.pendingPower.stage === 'decide') {
       const t = state.pendingPower.targets;
       const label = document.createElement('span');
-      label.textContent = `Peeked: ${t[0].rank}${SUIT_SYMBOL[t[0].suit]} and ${t[1].rank}${SUIT_SYMBOL[t[1].suit]}. Swap them?`;
+      label.textContent = 'Peeked two cards — drag one onto the other to swap them, or leave them.';
       powerBar.appendChild(label);
-      const yesBtn = document.createElement('button');
-      yesBtn.className = 'btn btn-secondary';
-      yesBtn.textContent = 'Swap them';
-      yesBtn.onclick = () => socket.emit('powerAction', { type: 'kingPower', action: 'decide', swap: true });
+      const cardsRow = document.createElement('div');
+      cardsRow.className = 'king-decide-row';
+      const elA = cardFace(t[0].rank, t[0].suit);
+      const elB = cardFace(t[1].rank, t[1].suit);
+      cardsRow.appendChild(elA);
+      cardsRow.appendChild(elB);
+      powerBar.appendChild(cardsRow);
+      setupKingDecideDrag(elA, elB, t[0].rank, t[0].suit);
+      setupKingDecideDrag(elB, elA, t[1].rank, t[1].suit);
       const noBtn = document.createElement('button');
       noBtn.className = 'btn btn-secondary';
-      noBtn.textContent = "Don't swap";
+      noBtn.textContent = 'Leave them (no swap)';
       noBtn.onclick = () => socket.emit('powerAction', { type: 'kingPower', action: 'decide', swap: false });
-      powerBar.appendChild(yesBtn);
       powerBar.appendChild(noBtn);
+    } else if (state.pendingPower.type === 'kingPower' && state.pendingPower.stage === 'start') {
+      const label = document.createElement('span');
+      label.textContent = 'Tap 1 or 2 cards to peek, or drag one card onto another to blind-swap without looking.';
+      powerBar.appendChild(label);
+      if (selectionBuffer.length >= 1) {
+        const peekBtn = document.createElement('button');
+        peekBtn.className = 'btn btn-secondary';
+        peekBtn.textContent = `Peek selected (${selectionBuffer.length})`;
+        peekBtn.onclick = () => {
+          const sel = selectionBuffer.slice();
+          selectionBuffer = [];
+          socket.emit('powerAction', { type: 'kingPower', action: 'peek', targets: sel });
+        };
+        powerBar.appendChild(peekBtn);
+      }
+      const skipBtn = document.createElement('button');
+      skipBtn.className = 'btn btn-secondary';
+      skipBtn.textContent = 'Skip';
+      skipBtn.onclick = () => socket.emit('skipPower');
+      powerBar.appendChild(skipBtn);
     } else {
       const label = document.createElement('span');
       const labels = {

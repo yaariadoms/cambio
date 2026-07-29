@@ -150,6 +150,7 @@ html, body {
   margin-top: 8px;
 }
 .action-bar .btn { width: auto; }
+.king-decide-row { display: flex; gap: 12px; justify-content: center; margin: 4px 0; }
 
 .my-area {
   background: rgba(255,255,255,0.08);
